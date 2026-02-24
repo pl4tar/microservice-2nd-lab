@@ -1,72 +1,75 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
-	"net/http"
-
+	"fmt"
 	"github.com/gin-gonic/gin"
+	"github.com/jinzhu/gorm"
+	_ "github.com/jinzhu/gorm/dialects/postgres"
+	"log"
+	"net/http"
 )
 
+// Модель данных для таблицы
 type Data struct {
 	ID      uint   `json:"id"`
 	Content string `json:"content"`
 }
 
-func ValidateToken(tokenString string) (bool, error) {
-	authServiceURL := "http://localhost:8081/validate-token"
-	data := map[string]string{"token": tokenString}
-	jsonData, err := json.Marshal(data)
-	if err != nil {
-		return false, err
-	}
+var db *gorm.DB
 
-	resp, err := http.Post(authServiceURL, "application/json", bytes.NewBuffer(jsonData))
+// Функция для инициализации базы данных
+func initDB() {
+	var err error
+	// Подключение к базе данных PostgreSQL
+	dsn := "host=localhost user=postgres password=8967451230 dbname=data_service port=5432 sslmode=disable"
+	db, err = gorm.Open("postgres", dsn)
 	if err != nil {
-		return false, err
+		log.Fatal("failed to connect to database")
 	}
-	defer resp.Body.Close()
+	fmt.Println("Successfully connected to the database!")
 
-	if resp.StatusCode == http.StatusOK {
-		return true, nil
-	}
-	return false, nil
+	// Миграция: создаем таблицы в базе данных на основе моделей
+	db.AutoMigrate(&Data{})
 }
 
-func TokenAuthMiddleware() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		tokenString := c.GetHeader("Authorization")
-		if tokenString == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Token is required"})
-			c.Abort()
-			return
-		}
-		valid, err := ValidateToken(tokenString)
-		if err != nil || !valid {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
-			c.Abort()
-			return
-		}
-
-		c.Next()
-	}
-}
-
+// Функция для получения всех данных из базы
 func GetData(c *gin.Context) {
-	data := []Data{
-		{ID: 1, Content: "Protected Data 1"},
-		{ID: 2, Content: "Protected Data 2"},
+	var data []Data
+	if err := db.Find(&data).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Could not retrieve data"})
+		return
+	}
+	c.JSON(http.StatusOK, data)
+}
+
+// Функция для добавления данных в базу
+func AddData(c *gin.Context) {
+	var data Data
+	if err := c.ShouldBindJSON(&data); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid data"})
+		return
+	}
+
+	// Добавляем данные в базу
+	if err := db.Create(&data).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Could not add data"})
+		return
 	}
 
 	c.JSON(http.StatusOK, data)
 }
 
 func main() {
+	// Инициализация базы данных
+	initDB()
+
+	// Настройка Gin для обработки запросов
 	r := gin.Default()
 
-	r.Use(TokenAuthMiddleware()) // Защита всех маршрутов данным сервисом
+	// Роуты для работы с данными
+	r.GET("/data", GetData)  // Получить все данные
+	r.POST("/data", AddData) // Добавить данные
 
-	r.GET("/data", GetData)
-
+	// Запуск сервера
 	r.Run(":8082")
 }
